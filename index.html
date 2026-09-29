@@ -226,10 +226,18 @@
         <span id="toast-message">Berhasil disimpan!</span>
     </div>
 
-    <script>
-        // --- 1. DATA STRUCTURE (Tabel Database In-Memory) ---
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, setDoc, updateDoc, deleteDoc, onSnapshot, collection } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // Konfigurasi Cloud Storage
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
+        let db, auth, userId;
+
+        // --- 1. DATA STRUCTURE (State Lokal) ---
         
-        // Tabel Konteks (Pemisah Utama)
         const contexts = [
             { id: 1, name: "Semester 5", color: "blue", icon: "ph-student" },
             { id: 2, name: "BEM Universitas", color: "purple", icon: "ph-users-three" },
@@ -237,7 +245,6 @@
             { id: 4, name: "Biru Kuning", color: "green", icon: "ph-flag-banner" }
         ];
 
-        // Mendapatkan warna tailwind berdasarkan string warna
         const getColors = (colorStr) => {
             const map = {
                 blue: { bg: 'bg-blue-100', text: 'text-blue-700', border: 'border-blue-200', active: 'bg-blue-600 text-white' },
@@ -249,35 +256,19 @@
             return map[colorStr] || map.gray;
         };
 
-        // Data dummy awal agar aplikasi tidak kosong saat pertama dibuka
-        // Tabel Agenda
-        let agendas = [
-            { id: 1, contextId: 1, title: "Kelas Pengganti Basis Data", datetime: "2026-09-30T10:00", notes: "Membahas relasi many-to-many.\nJangan lupa bawa laptop karena ada kuis dadakan." },
-            { id: 2, contextId: 2, title: "Rapat Pleno BEM Bulan September", datetime: "2026-09-29T19:00", notes: "Agenda utama:\n1. Evaluasi proker bulan ini.\n2. Pembahasan anggaran sisa." }
-        ];
-
-        // Tabel Tugas
-        let tasks = [
-            { id: 1, contextId: 1, relatedTopic: "Basis Data", title: "Kerjakan modul ERD", deadline: "2026-09-29T23:59", isDone: false },
-            { id: 2, contextId: 2, relatedTopic: "Rapat Pleno BEM Bulan September", title: "Rekap LPJ Kegiatan Donor Darah", deadline: "2026-10-02T15:00", isDone: false },
-            { id: 3, contextId: 3, relatedTopic: "", title: "Wawancara narasumber liputan utama", deadline: "2026-09-28T16:00", isDone: false }, // Sangat dekat
-            { id: 4, contextId: 4, relatedTopic: "", title: "Fiksasi vendor tenda", deadline: "2026-09-29T12:00", isDone: true }
-        ];
-
-        // Tabel Catatan
-        let notes = [
-            { id: 1, contextId: 1, title: "Persiapan UTS", content: "Jangan lupa tanya asdos tentang kisi-kisi UTS.", timestamp: new Date().toISOString() },
-            { id: 2, contextId: 2, title: "Rencana Kolaborasi", content: "Ide BEM: Adakan kolaborasi proker dengan BEM Fakultas Teknik.", timestamp: new Date(Date.now() - 86400000).toISOString() }
-        ];
+        // Arrays akan diisi dari Cloud Storage
+        let agendas = [];
+        let tasks = [];
+        let notes = [];
 
         // State Global
-        let activeContextId = null; // Null berarti tampilkan semua
+        let activeContextId = null; 
         let editingAgendaId = null;
         let editingTaskId = null;
         let editingNoteId = null;
 
-        // --- 2. LOGIKA RENDERING UI ---
-        function initApp() {
+        // --- Inisialisasi Aplikasi ---
+        async function initApp() {
             // Set tanggal hari ini di header
             const today = new Date();
             const options = { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' };
@@ -286,13 +277,60 @@
             renderSidebar();
             populateSelectInputs();
             renderDashboard();
+
+            // Inisialisasi Cloud Storage
+            if (Object.keys(firebaseConfig).length > 0) {
+                try {
+                    const app = initializeApp(firebaseConfig);
+                    db = getFirestore(app);
+                    auth = getAuth(app);
+
+                    if (typeof __initial_auth_token !== 'undefined') {
+                        await signInWithCustomToken(auth, __initial_auth_token);
+                    } else {
+                        await signInAnonymously(auth);
+                    }
+                    userId = auth.currentUser.uid;
+                    setupCloudListeners();
+                    showToast("Terhubung ke penyimpanan awan!");
+                } catch (error) {
+                    console.error("Gagal terhubung:", error);
+                    showToast("Sistem berjalan secara offline");
+                }
+            }
         }
 
+        // --- 2. LOGIKA CLOUD STORAGE ---
+        function setupCloudListeners() {
+            if (!userId) return;
+
+            // Dengarkan perubahan Agendas
+            onSnapshot(collection(db, 'artifacts', appId, 'users', userId, 'agendas'), (snapshot) => {
+                agendas = [];
+                snapshot.forEach(doc => agendas.push({ id: doc.id, ...doc.data() }));
+                renderDashboard();
+            }, (error) => console.error("Error agendas:", error));
+
+            // Dengarkan perubahan Tasks
+            onSnapshot(collection(db, 'artifacts', appId, 'users', userId, 'tasks'), (snapshot) => {
+                tasks = [];
+                snapshot.forEach(doc => tasks.push({ id: doc.id, ...doc.data() }));
+                renderDashboard();
+            }, (error) => console.error("Error tasks:", error));
+
+            // Dengarkan perubahan Notes
+            onSnapshot(collection(db, 'artifacts', appId, 'users', userId, 'notes'), (snapshot) => {
+                notes = [];
+                snapshot.forEach(doc => notes.push({ id: doc.id, ...doc.data() }));
+                renderDashboard();
+            }, (error) => console.error("Error notes:", error));
+        }
+
+        // --- 3. LOGIKA RENDERING UI ---
         function renderSidebar() {
             const list = document.getElementById('context-list');
             list.innerHTML = '';
 
-            // Tombol "Semua"
             const allBtn = document.createElement('button');
             const isAllActive = activeContextId === null;
             allBtn.className = `flex items-center gap-3 px-4 py-3 rounded-xl transition-all font-medium whitespace-nowrap md:whitespace-normal w-auto md:w-full text-left
@@ -301,7 +339,6 @@
             allBtn.onclick = () => switchContext(null);
             list.appendChild(allBtn);
 
-            // Render tombol per konteks
             contexts.forEach(ctx => {
                 const isActive = activeContextId === ctx.id;
                 const colors = getColors(ctx.color);
@@ -320,7 +357,6 @@
             activeContextId = id;
             renderSidebar();
             
-            // Ubah Judul Header
             const titleEl = document.getElementById('current-context-title');
             if (id === null) {
                 titleEl.innerText = "Semua Agenda";
@@ -339,7 +375,6 @@
             renderNotes();
         }
 
-        // Helper Format Waktu
         function formatDateTime(isoString) {
             const d = new Date(isoString);
             return d.toLocaleDateString('id-ID', { day: 'numeric', month: 'short' }) + ', ' + 
@@ -352,12 +387,10 @@
             container.innerHTML = '';
             
             const now = new Date();
-            
-            // Filter: Bukan yang sudah selesai, Filter Konteks, Urutkan terdekat
             let filteredTasks = tasks
                 .filter(t => !t.isDone && (activeContextId === null || t.contextId === activeContextId))
                 .sort((a, b) => new Date(a.deadline) - new Date(b.deadline))
-                .slice(0, 3); // Ambil 3 terdekat
+                .slice(0, 3);
 
             if (filteredTasks.length === 0) {
                 section.classList.add('hidden');
@@ -370,7 +403,6 @@
                 const ctx = contexts.find(c => c.id === task.contextId);
                 const colors = getColors(ctx.color);
                 
-                // Cek apakah sudah lewat waktu
                 const isOverdue = new Date(task.deadline) < now;
                 const timeColor = isOverdue ? 'text-red-600 font-bold' : 'text-gray-600';
                 const timeIcon = isOverdue ? 'ph-warning-circle text-red-500' : 'ph-clock';
@@ -381,7 +413,7 @@
                     <div class="absolute top-0 left-0 w-1 h-full ${colors.bg.replace('100', '400')}"></div>
                     <div class="flex justify-between items-start mb-2 pl-2">
                         <span class="text-xs font-semibold px-2 py-1 rounded-md ${colors.bg} ${colors.text}">${ctx.name}</span>
-                        <button onclick="toggleTaskStatus(${task.id})" class="text-gray-300 hover:text-emerald-500 transition-colors" title="Tandai Selesai">
+                        <button onclick="toggleTaskStatus('${task.id}')" class="text-gray-300 hover:text-emerald-500 transition-colors" title="Tandai Selesai">
                             <i class="ph ph-circle text-2xl"></i>
                         </button>
                     </div>
@@ -427,11 +459,11 @@
                         </div>
                     </div>
                     <div class="flex items-center gap-1 sm:gap-2 mt-3 sm:mt-0 pt-3 sm:pt-0 border-t sm:border-t-0 border-gray-100 w-full sm:w-auto justify-end">
-                        <button onclick="event.stopPropagation(); openDetailModal(${agenda.id})" class="text-sm font-medium text-indigo-600 bg-indigo-50 px-4 py-2 rounded-lg hover:bg-indigo-100 whitespace-nowrap hidden sm:block">Detail</button>
-                        <button onclick="event.stopPropagation(); editAgenda(${agenda.id})" class="text-gray-400 hover:text-amber-500 p-2 rounded-md hover:bg-amber-50 transition-colors" title="Edit Agenda">
+                        <button onclick="event.stopPropagation(); openDetailModal('${agenda.id}')" class="text-sm font-medium text-indigo-600 bg-indigo-50 px-4 py-2 rounded-lg hover:bg-indigo-100 whitespace-nowrap hidden sm:block">Detail</button>
+                        <button onclick="event.stopPropagation(); editAgenda('${agenda.id}')" class="text-gray-400 hover:text-amber-500 p-2 rounded-md hover:bg-amber-50 transition-colors" title="Edit Agenda">
                             <i class="ph ph-pencil-simple text-lg"></i>
                         </button>
-                        <button onclick="event.stopPropagation(); deleteAgenda(${agenda.id})" class="text-gray-400 hover:text-red-500 p-2 rounded-md hover:bg-red-50 transition-colors" title="Hapus Agenda">
+                        <button onclick="event.stopPropagation(); deleteAgenda('${agenda.id}')" class="text-gray-400 hover:text-red-500 p-2 rounded-md hover:bg-red-50 transition-colors" title="Hapus Agenda">
                             <i class="ph ph-trash text-lg"></i>
                         </button>
                     </div>
@@ -460,7 +492,7 @@
                 const item = document.createElement('div');
                 item.className = `bg-white p-3.5 rounded-xl border border-gray-200 shadow-sm flex items-start gap-3 transition-all ${task.isDone ? 'opacity-50 bg-gray-50' : 'hover:border-gray-300 hover:shadow'}`;
                 item.innerHTML = `
-                    <button onclick="toggleTaskStatus(${task.id})" class="mt-0.5 flex-shrink-0 transition-transform hover:scale-110 ${task.isDone ? 'text-emerald-500' : 'text-gray-300 hover:text-emerald-400'}">
+                    <button onclick="toggleTaskStatus('${task.id}')" class="mt-0.5 flex-shrink-0 transition-transform hover:scale-110 ${task.isDone ? 'text-emerald-500' : 'text-gray-300 hover:text-emerald-400'}">
                         <i class="ph-fill ${task.isDone ? 'ph-check-circle' : 'ph-circle'} text-[22px]"></i>
                     </button>
                     <div class="flex-1 min-w-0">
@@ -474,10 +506,10 @@
                         </p>
                     </div>
                     <div class="flex gap-1 flex-shrink-0">
-                        <button onclick="editTask(${task.id})" class="text-gray-400 hover:text-amber-500 p-1.5 rounded-md hover:bg-amber-50 transition-colors" title="Edit Tugas">
+                        <button onclick="editTask('${task.id}')" class="text-gray-400 hover:text-amber-500 p-1.5 rounded-md hover:bg-amber-50 transition-colors" title="Edit Tugas">
                             <i class="ph ph-pencil-simple text-lg"></i>
                         </button>
-                        <button onclick="deleteTask(${task.id})" class="text-gray-400 hover:text-red-500 p-1.5 rounded-md hover:bg-red-50 transition-colors" title="Hapus Tugas">
+                        <button onclick="deleteTask('${task.id}')" class="text-gray-400 hover:text-red-500 p-1.5 rounded-md hover:bg-red-50 transition-colors" title="Hapus Tugas">
                             <i class="ph ph-trash text-lg"></i>
                         </button>
                     </div>
@@ -490,7 +522,6 @@
             const container = document.getElementById('notes-container');
             container.innerHTML = '';
 
-            // Filter berdasarkan ruang yang dipilih, urutkan dari yang terbaru
             let filteredNotes = notes
                 .filter(n => activeContextId === null || n.contextId === activeContextId)
                 .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
@@ -511,10 +542,10 @@
                     <div class="flex justify-between items-start mb-2">
                         <span class="text-[10px] font-bold tracking-wide px-2 py-0.5 rounded ${colors.bg} ${colors.text}">${ctx.name}</span>
                         <div class="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                            <button onclick="editNote(${note.id})" class="text-gray-400 hover:text-amber-500 p-1 rounded hover:bg-amber-100/50" title="Edit Catatan">
+                            <button onclick="editNote('${note.id}')" class="text-gray-400 hover:text-amber-500 p-1 rounded hover:bg-amber-100/50" title="Edit Catatan">
                                  <i class="ph ph-pencil-simple"></i>
                             </button>
-                            <button onclick="deleteNote(${note.id})" class="text-gray-400 hover:text-red-500 p-1 rounded hover:bg-red-100/50" title="Hapus Catatan">
+                            <button onclick="deleteNote('${note.id}')" class="text-gray-400 hover:text-red-500 p-1 rounded hover:bg-red-100/50" title="Hapus Catatan">
                                  <i class="ph ph-trash"></i>
                             </button>
                         </div>
@@ -526,53 +557,73 @@
             });
         }
 
-        function toggleTaskStatus(id) {
+        async function toggleTaskStatus(id) {
             const task = tasks.find(t => t.id === id);
             if (task) {
-                task.isDone = !task.isDone;
-                renderDashboard();
+                const newStatus = !task.isDone;
+                if(userId) {
+                    await updateDoc(doc(db, 'artifacts', appId, 'users', userId, 'tasks', id), { isDone: newStatus });
+                } else {
+                    task.isDone = newStatus;
+                    renderDashboard();
+                }
                 
-                // Jika sedang di detail modal, re-render tasks nya
+                // Re-render detail modal if open
                 const detailModal = document.getElementById('detail-modal');
                 if (!detailModal.classList.contains('hidden')) {
                     const activeAgendaId = detailModal.getAttribute('data-agenda-id');
-                    if(activeAgendaId) {
-                        openDetailModal(parseInt(activeAgendaId));
-                    }
+                    if(activeAgendaId) openDetailModal(activeAgendaId);
                 }
             }
         }
 
-        function deleteTask(id) {
-            tasks = tasks.filter(t => t.id !== id);
-            renderDashboard();
+        async function deleteTask(id) {
+            if(userId) {
+                await deleteDoc(doc(db, 'artifacts', appId, 'users', userId, 'tasks', id));
+            } else {
+                tasks = tasks.filter(t => t.id !== id);
+                renderDashboard();
+            }
             showToast("Tugas dihapus");
         }
 
-        function deleteNote(id) {
-            notes = notes.filter(n => n.id !== id);
-            renderDashboard();
+        async function deleteNote(id) {
+            if(userId) {
+                await deleteDoc(doc(db, 'artifacts', appId, 'users', userId, 'notes', id));
+            } else {
+                notes = notes.filter(n => n.id !== id);
+                renderDashboard();
+            }
             showToast("Catatan dihapus");
         }
 
-        function deleteAgenda(id) {
-            // Hapus agenda beserta tugas-tugas yang menempel secara diam-diam (tanpa popup konfirmasi kasar)
+        async function deleteAgenda(id) {
             const agenda = agendas.find(a => a.id === id);
-            agendas = agendas.filter(a => a.id !== id);
-            if(agenda) {
-                tasks = tasks.filter(t => !(t.relatedTopic && t.relatedTopic.toLowerCase() === agenda.title.toLowerCase()));
+            if(userId) {
+                await deleteDoc(doc(db, 'artifacts', appId, 'users', userId, 'agendas', id));
+                if (agenda) {
+                    const relatedTasks = tasks.filter(t => t.relatedTopic && t.relatedTopic.toLowerCase() === agenda.title.toLowerCase());
+                    for (const t of relatedTasks) {
+                        await deleteDoc(doc(db, 'artifacts', appId, 'users', userId, 'tasks', t.id));
+                    }
+                }
+            } else {
+                agendas = agendas.filter(a => a.id !== id);
+                if(agenda) {
+                    tasks = tasks.filter(t => !(t.relatedTopic && t.relatedTopic.toLowerCase() === agenda.title.toLowerCase()));
+                }
+                renderDashboard();
             }
-            renderDashboard();
             showToast("Agenda & Tugas terkait dihapus");
         }
 
-        // --- FUNGSI EDIT ---
+        // --- 4. FUNGSI EDIT & SAVE (CLOUD) ---
         function editAgenda(id) {
             const agenda = agendas.find(a => a.id === id);
             if (!agenda) return;
             
             editingAgendaId = id;
-            populateSelectInputs(); // Persiapkan dropdown terlebih dahulu
+            populateSelectInputs(); 
             
             document.getElementById('agenda-context').value = agenda.contextId;
             document.getElementById('agenda-title').value = agenda.title;
@@ -635,7 +686,6 @@
             taskCtxSelect.innerHTML = optionsHtml;
             noteCtxSelect.innerHTML = optionsHtml;
             
-            // Set default value based on current view
             if (activeContextId) {
                 agendaCtxSelect.value = activeContextId;
                 taskCtxSelect.value = activeContextId;
@@ -650,19 +700,17 @@
             const label = document.getElementById('task-related-label');
             const selectedCtxId = parseInt(taskCtxSelect.value);
 
-            if (selectedCtxId === 1) { // Jika Konteks = Semester 5
+            if (selectedCtxId === 1) { 
                 label.innerHTML = 'Matakuliah apa?';
             } else {
                 label.innerHTML = 'Agenda apa?';
             }
         }
 
-        // Fungsi Modal Umum
         function openModal(modalId) {
             document.getElementById('modal-overlay').classList.remove('hidden');
             document.getElementById('modal-overlay').classList.add('flex');
             
-            // Animasi masuk
             setTimeout(() => {
                 document.getElementById('modal-overlay').classList.remove('opacity-0');
                 document.getElementById(modalId).classList.remove('hidden');
@@ -672,7 +720,6 @@
                 }, 10);
             }, 10);
 
-            // Pre-fill konteks hanya jika kita membukanya untuk Tambah Baru (bukan Edit)
             if((modalId === 'agenda-modal' && !editingAgendaId) || 
                (modalId === 'task-modal' && !editingTaskId) || 
                (modalId === 'note-modal' && !editingNoteId)) {
@@ -700,7 +747,6 @@
                 overlay.classList.add('hidden');
                 overlay.classList.remove('flex');
                 
-                // Clear inputs
                 document.getElementById('agenda-title').value = '';
                 document.getElementById('agenda-datetime').value = '';
                 document.getElementById('agenda-notes').value = '';
@@ -710,12 +756,10 @@
                 document.getElementById('note-title').value = '';
                 document.getElementById('note-content').value = '';
 
-                // Reset Edit States
                 editingAgendaId = null;
                 editingTaskId = null;
                 editingNoteId = null;
 
-                // Reset Teks Modal ke Default (Tambah Baru)
                 document.getElementById('agenda-modal-title').innerText = "Tambah Agenda Rapat";
                 document.getElementById('agenda-modal-btn').innerText = "Simpan Agenda";
                 document.getElementById('task-modal-title').innerText = "Tambah Tugas Baru";
@@ -725,7 +769,6 @@
             }, 300);
         }
 
-        // Tampilkan Notifikasi
         function showToast(message) {
             const toast = document.getElementById('toast');
             document.getElementById('toast-message').innerText = message;
@@ -737,40 +780,36 @@
             }, 3000);
         }
 
-        function saveAgenda() {
+        async function saveAgenda() {
             const ctxId = parseInt(document.getElementById('agenda-context').value);
             const title = document.getElementById('agenda-title').value.trim();
             const datetime = document.getElementById('agenda-datetime').value;
-            const notes = document.getElementById('agenda-notes').value.trim();
+            const notesText = document.getElementById('agenda-notes').value.trim();
 
             if (!title || !datetime) {
                 showToast("Oops! Mohon isi judul dan waktu agenda.");
                 return;
             }
 
-            if (editingAgendaId) {
-                const index = agendas.findIndex(a => a.id === editingAgendaId);
-                if (index !== -1) {
-                    agendas[index] = { ...agendas[index], contextId: ctxId, title, datetime, notes };
+            const payload = { contextId: ctxId, title, datetime, notes: notesText };
+
+            if (userId) {
+                if (editingAgendaId) {
+                    await updateDoc(doc(db, 'artifacts', appId, 'users', userId, 'agendas', editingAgendaId), payload);
+                    showToast("Agenda berhasil diperbarui");
+                } else {
+                    const newId = crypto.randomUUID();
+                    await setDoc(doc(db, 'artifacts', appId, 'users', userId, 'agendas', newId), payload);
+                    showToast("Agenda Rapat Berhasil Disimpan");
                 }
-                showToast("Agenda berhasil diperbarui");
             } else {
-                const newAgenda = {
-                    id: Date.now(),
-                    contextId: ctxId,
-                    title: title,
-                    datetime: datetime,
-                    notes: notes
-                };
-                agendas.push(newAgenda);
-                showToast("Agenda Rapat Berhasil Disimpan");
+                showToast("Mode Offline: Tidak dapat menyimpan permanen");
             }
 
             closeModals();
-            renderDashboard();
         }
 
-        function saveTask() {
+        async function saveTask() {
             const ctxId = parseInt(document.getElementById('task-context').value);
             const relatedTopic = document.getElementById('task-related-input').value.trim();
             const title = document.getElementById('task-title').value.trim();
@@ -781,30 +820,25 @@
                 return;
             }
 
-            if (editingTaskId) {
-                const index = tasks.findIndex(t => t.id === editingTaskId);
-                if (index !== -1) {
-                    tasks[index] = { ...tasks[index], contextId: ctxId, relatedTopic, title, deadline };
+            const payload = { contextId: ctxId, relatedTopic, title, deadline };
+
+            if (userId) {
+                if (editingTaskId) {
+                    await updateDoc(doc(db, 'artifacts', appId, 'users', userId, 'tasks', editingTaskId), payload);
+                    showToast("Tugas berhasil diperbarui");
+                } else {
+                    const newId = crypto.randomUUID();
+                    await setDoc(doc(db, 'artifacts', appId, 'users', userId, 'tasks', newId), { ...payload, isDone: false });
+                    showToast("Tugas Baru Berhasil Disimpan");
                 }
-                showToast("Tugas berhasil diperbarui");
             } else {
-                const newTask = {
-                    id: Date.now(),
-                    contextId: ctxId,
-                    relatedTopic: relatedTopic,
-                    title: title,
-                    deadline: deadline,
-                    isDone: false
-                };
-                tasks.push(newTask);
-                showToast("Tugas Baru Berhasil Disimpan");
+                showToast("Mode Offline: Tidak dapat menyimpan permanen");
             }
 
             closeModals();
-            renderDashboard();
         }
 
-        function saveNote() {
+        async function saveNote() {
             const ctxId = parseInt(document.getElementById('note-context').value);
             const title = document.getElementById('note-title').value.trim();
             const content = document.getElementById('note-content').value.trim();
@@ -814,26 +848,22 @@
                 return;
             }
 
-            if (editingNoteId) {
-                const index = notes.findIndex(n => n.id === editingNoteId);
-                if (index !== -1) {
-                    notes[index] = { ...notes[index], contextId: ctxId, title, content };
+            const payload = { contextId: ctxId, title, content };
+
+            if (userId) {
+                if (editingNoteId) {
+                    await updateDoc(doc(db, 'artifacts', appId, 'users', userId, 'notes', editingNoteId), payload);
+                    showToast("Catatan berhasil diperbarui");
+                } else {
+                    const newId = crypto.randomUUID();
+                    await setDoc(doc(db, 'artifacts', appId, 'users', userId, 'notes', newId), { ...payload, timestamp: new Date().toISOString() });
+                    showToast("Catatan Berhasil Disimpan");
                 }
-                showToast("Catatan berhasil diperbarui");
             } else {
-                const newNote = {
-                    id: Date.now(),
-                    contextId: ctxId,
-                    title: title,
-                    content: content,
-                    timestamp: new Date().toISOString()
-                };
-                notes.push(newNote);
-                showToast("Catatan Berhasil Disimpan");
+                showToast("Mode Offline: Tidak dapat menyimpan permanen");
             }
 
             closeModals();
-            renderDashboard();
         }
 
         function openDetailModal(agendaId) {
@@ -843,7 +873,6 @@
             const ctx = contexts.find(c => c.id === agenda.contextId);
             const colors = getColors(ctx.color);
 
-            // Setup Header Modal
             const badge = document.getElementById('detail-context-badge');
             badge.className = `text-xs font-semibold px-2 py-1 rounded-md mb-2 inline-block ${colors.bg} ${colors.text}`;
             badge.innerText = ctx.name;
@@ -851,7 +880,6 @@
             document.getElementById('detail-title').innerText = agenda.title;
             document.getElementById('detail-time').innerHTML = `<i class="ph-fill ph-calendar text-indigo-500"></i> ${formatDateTime(agenda.datetime)}`;
             
-            // Setup Notes
             const notesContainer = document.getElementById('detail-notes');
             if (agenda.notes) {
                 notesContainer.innerText = agenda.notes;
@@ -861,7 +889,6 @@
                 notesContainer.classList.add('italic', 'text-gray-400');
             }
 
-            // Setup Linked Tasks
             const relatedTasks = tasks.filter(t => t.relatedTopic && t.relatedTopic.toLowerCase() === agenda.title.toLowerCase());
             const tasksContainer = document.getElementById('detail-tasks');
             tasksContainer.innerHTML = '';
@@ -874,7 +901,7 @@
                     item.className = `bg-white border border-gray-200 p-3 rounded-lg flex items-center justify-between shadow-sm`;
                     item.innerHTML = `
                         <div class="flex items-center gap-3">
-                            <button onclick="toggleTaskStatus(${task.id})" class="transition-transform hover:scale-110 ${task.isDone ? 'text-emerald-500' : 'text-gray-300 hover:text-emerald-400'}">
+                            <button onclick="toggleTaskStatus('${task.id}')" class="transition-transform hover:scale-110 ${task.isDone ? 'text-emerald-500' : 'text-gray-300 hover:text-emerald-400'}">
                                 <i class="ph-fill ${task.isDone ? 'ph-check-circle' : 'ph-circle'} text-xl"></i>
                             </button>
                             <div>
@@ -887,11 +914,26 @@
                 });
             }
 
-            // Simpan ID agenda ke modal untuk reference
             document.getElementById('detail-modal').setAttribute('data-agenda-id', agendaId);
-
             openModal('detail-modal');
         }
+
+        // Ekspos fungsi ke Window agar bisa diakses oleh onclick di HTML
+        window.openModal = openModal;
+        window.closeModals = closeModals;
+        window.switchContext = switchContext;
+        window.updateTaskFormUI = updateTaskFormUI;
+        window.saveAgenda = saveAgenda;
+        window.saveTask = saveTask;
+        window.saveNote = saveNote;
+        window.editAgenda = editAgenda;
+        window.editTask = editTask;
+        window.editNote = editNote;
+        window.deleteAgenda = deleteAgenda;
+        window.deleteTask = deleteTask;
+        window.deleteNote = deleteNote;
+        window.toggleTaskStatus = toggleTaskStatus;
+        window.openDetailModal = openDetailModal;
 
         // Initialize App on Load
         window.onload = initApp;
